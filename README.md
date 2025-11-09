@@ -1,4 +1,4 @@
-# FinalCompletoSolertia
+# MVP Final Solertia
 
 Monorepo del sistema **Solertia** para restaurantes: backend en FastAPI y frontend en React/Vite.
 
