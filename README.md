@@ -38,7 +38,7 @@ FinalCompletoSolertia/
 
 ## Requisitos
 
-- **Python 3.11+**
+- **Python 3.12.4**
 - **Node 18+** (o versión compatible con Vite)
 - Cuenta de **OpenAI** (para el asistente y analytics)
 - (Opcional) Base de datos PostgreSQL / Supabase para Manager Analytics
