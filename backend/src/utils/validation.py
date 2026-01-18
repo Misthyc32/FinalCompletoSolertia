@@ -5,7 +5,7 @@ Provides data validation and sanitization functions.
 import re
 from datetime import datetime, date, time
 from typing import Optional, Dict, Any
-from utils.error_handling import ValidationError
+from src.utils.error_handling import ValidationError
 
 def validate_customer_id(customer_id: str) -> str:
     """

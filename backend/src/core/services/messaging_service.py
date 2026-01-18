@@ -4,11 +4,19 @@ from src.core.menu_index import load_menu_vector
 from src.core.db import SessionLocal, save_message, load_history
 import re
 import unicodedata
+from pathlib import Path
 
 # Load menu once (env override allowed)
-MENU_PATH = os.getenv("MENU_PATH", "menu_casona_completo.json")
-vector_store = load_menu_vector(MENU_PATH)
+MENU_URL = os.getenv("MENU_URL")  # production: Supabase public URL
+
+# fallback local file for dev (backend/menu_casona_completo.json)
+PROJECT_ROOT = Path(__file__).resolve().parents[3]  # src/core/services -> src/core -> src -> backend root
+LOCAL_MENU_PATH = str(PROJECT_ROOT / "menu_casona_completo.json")
+
+menu_source = MENU_URL or os.getenv("MENU_PATH") or LOCAL_MENU_PATH
+vector_store = load_menu_vector(menu_source)
 chatbot = build_app(vector_store)
+
 
 # Very simple in-memory session store
 _sessions = {}

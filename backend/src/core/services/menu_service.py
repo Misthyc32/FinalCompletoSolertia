@@ -7,15 +7,20 @@ from src.core.menu_index import load_menu_vector
 from langchain_core.documents import Document
 import os
 
-
 class MenuService:
     def __init__(self):
         """Initialize the menu service with vector store."""
-        # Go up to project root: src/core/services -> src/core -> src -> project root
+
+        menu_url = os.getenv("MENU_URL")
+        if menu_url:
+            self.vector_store = load_menu_vector(menu_url)
+            return
+
+        # 2) Fallback to local file for development
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
         menu_path = os.path.join(project_root, "menu_casona_completo.json")
         self.vector_store = load_menu_vector(menu_path)
-    
+
     def search_menu(self, query: str, k: int = 6) -> List[Dict[str, Any]]:
         """
         Search the menu for items matching the query.
