@@ -1,12 +1,15 @@
 """
 Manager Analytics Service - Independent SQL agent for managers.
 Provides data analysis capabilities through natural language queries.
+
+Compatible with langchain==1.2.0 by using LangGraph create_react_agent
+(instead of AgentExecutor/create_tool_calling_agent which no longer exist).
 """
 import os
 import io
 import re
 import binascii
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")  # No GUI backend
@@ -19,9 +22,8 @@ from sqlglot.errors import ParseError
 
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from langchain.agents import create_tool_calling_agent, AgentExecutor
-from langchain.tools import StructuredTool
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain_core.tools import StructuredTool  # <-- IMPORTANT for langchain 1.x
+from langgraph.prebuilt import create_react_agent  # <-- LangGraph agent runtime
 
 from src.core.config import OPENAI_API_KEY
 
@@ -68,7 +70,6 @@ ALLOWED_TABLES_QUOTED = {
 
 # Plot cache (in-memory, scoped to service instance)
 PLOT_CACHE: Dict[str, bytes] = {}
-
 
 # ------------- UTILITY FUNCTIONS -------------
 
@@ -171,7 +172,6 @@ def _run_sql_readonly(sql: str) -> pd.DataFrame:
         conn.execute(text(f"SET LOCAL statement_timeout = '{STATEMENT_TIMEOUT_MS}ms'"))
         return pd.read_sql(text(sql), conn)
 
-
 # ------------- TOOLS -------------
 
 class SQLArgs(BaseModel):
@@ -199,7 +199,6 @@ def run_sql(sql: str) -> str:
             total = len(df)
             null_counts[col] = f"{null_count}/{total} NULL"
             if null_count == total and total > 0:
-                # All values are NULL - suggest using alternative date column
                 suggestions = []
                 if 'date' in sql.lower():
                     suggestions.append("Try using COALESCE(r.date, r.created_at, to_date(r.reservation_time, 'DD/MM/YYYY')) instead of just r.date")
@@ -216,14 +215,13 @@ def run_sql(sql: str) -> str:
     meta = f"rows={len(df)}, cols={list(df.columns)}"
     preview_md = df.head(10).to_markdown(index=False)
     preview_json = df.head(10).to_json(orient="records")
-    
-    # Add warning if single row with NULL date for time-series queries
+
     if len(df) == 1 and date_columns:
         date_col = date_columns[0]
         if df[date_col].iloc[0] is None or pd.isna(df[date_col].iloc[0]):
             warning = f"\n\n⚠️ WARNING: Only 1 row returned with NULL {date_col}. For historical charts, you need multiple data points. Try using COALESCE(r.date, r.created_at, to_date(r.reservation_time, 'DD/MM/YYYY')) AS date_col in your GROUP BY."
             return f"{meta}\n\nPREVIEW:\n{preview_md}\n\nDF_JSON_HEAD:\n{preview_json}{warning}"
-    
+
     return f"{meta}\n\nPREVIEW:\n{preview_md}\n\nDF_JSON_HEAD:\n{preview_json}"
 
 
@@ -316,24 +314,19 @@ def plot_from_sql(data_sql: str, x: str, y_cols: List[str], title: Optional[str]
     if x not in df.columns or any(col not in df.columns for col in y_cols):
         return f"Missing columns. Available: {list(df.columns)}"
 
-    # Validate we have enough data points for a meaningful chart
     if len(df) < 2:
         return (
             f"Query returned only {len(df)} row(s). For historical charts, you need multiple data points over time. "
             f"Make sure your SQL includes a GROUP BY with a date/time column (like date, wk, month, etc.) "
-            f"and ORDER BY that column. Example: SELECT date_trunc('week', date) AS wk, SUM(revenue) AS total "
-            f"FROM ... GROUP BY wk ORDER BY wk"
+            f"and ORDER BY that column."
         )
 
-    # Sort by x if possible
     try:
         df = df.sort_values(by=[x])
     except Exception:
         pass
 
-    # Convert x column to string if it's not numeric or datetime (for better display)
     try:
-        # Try to convert dates if they're strings
         if df[x].dtype == 'object':
             try:
                 df[x] = pd.to_datetime(df[x])
@@ -342,22 +335,19 @@ def plot_from_sql(data_sql: str, x: str, y_cols: List[str], title: Optional[str]
     except Exception:
         pass
 
-    # Downsample if too many points
     if len(df) > 3000:
         step = max(1, len(df) // 1500)
         df = df.iloc[::step].copy()
 
-    # Validate y columns are numeric
     for col in y_cols:
         if not pd.api.types.is_numeric_dtype(df[col]):
             try:
                 df[col] = pd.to_numeric(df[col], errors='coerce')
             except Exception:
-                return f"Column '{col}' is not numeric and cannot be converted. Available numeric columns: {[c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])]}"
+                return f"Column '{col}' is not numeric and cannot be converted."
 
     fig, ax = plt.subplots(figsize=(10, 5), constrained_layout=True)
     for col in y_cols:
-        # Filter out NaN values
         valid_mask = pd.notna(df[x]) & pd.notna(df[col])
         if valid_mask.sum() < 1:
             continue
@@ -368,7 +358,6 @@ def plot_from_sql(data_sql: str, x: str, y_cols: List[str], title: Optional[str]
     ax.legend(loc="best")
     ax.grid(True, alpha=0.3)
 
-    # Rotate x-axis labels if they're dates or strings
     if df[x].dtype == 'object' or pd.api.types.is_datetime64_any_dtype(df[x]):
         plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
@@ -398,41 +387,31 @@ Rules:
 - earnings (approx) = SUM(revenue * COALESCE(menu_items.margen_ganancia, 0)).
 - tip_rate = tip / NULLIF(total_ticket, 0).
 - Dates: ALWAYS use COALESCE to handle NULL dates. Use: COALESCE(reservations.date, reservations.created_at, to_date(reservations.reservation_time, 'DD/MM/YYYY')) AS date_col
-- If reservations.date is NULL, fallback to created_at or parse reservation_time.
 
 CRITICAL FOR HISTORICAL CHARTS:
-- When creating historical/time-series charts, you MUST include a time dimension in your SELECT.
-- ALWAYS use GROUP BY with a date/time column (date, week, month, etc.) for historical data.
-- NEVER return just a single aggregated total for charts - you need multiple data points over time.
-- Examples for historical queries (with NULL handling):
-  * Daily: SELECT DATE(COALESCE(r.date, r.created_at, to_date(r.reservation_time, 'DD/MM/YYYY'))) AS day, SUM(ri.quantity * ri.price_at_visit) AS total FROM public.reservations r JOIN public.reservation_items ri ON r.reservation_id = ri.reservation_id GROUP BY day ORDER BY day
-  * Weekly: SELECT date_trunc('week', COALESCE(r.date, r.created_at, to_date(r.reservation_time, 'DD/MM/YYYY'))) AS wk, SUM(ri.quantity * ri.price_at_visit) AS total FROM public.reservations r JOIN public.reservation_items ri ON r.reservation_id = ri.reservation_id GROUP BY wk ORDER BY wk
-  * Monthly: SELECT date_trunc('month', COALESCE(r.date, r.created_at, to_date(r.reservation_time, 'DD/MM/YYYY'))) AS month, SUM(ri.quantity * ri.price_at_visit) AS total FROM public.reservations r JOIN public.reservation_items ri ON r.reservation_id = ri.reservation_id GROUP BY month ORDER BY month
-- The x-axis column for plot_from_sql MUST be the time dimension (day, wk, month, date, etc.)
-- The y-axis columns must be numeric aggregations (SUM, AVG, COUNT, etc.)
-- Always ORDER BY the time column to ensure chronological order.
-
-General rules:
-- Store filter: reservations.store_id = <id>.
-- Keep answers concise. When returning a plot, output EXACTLY:
+- Always include time dimension, GROUP BY it, ORDER BY it.
+- Examples:
+  * Weekly: SELECT date_trunc('week', COALESCE(r.date, r.created_at, to_date(r.reservation_time, 'DD/MM/YYYY'))) AS wk, SUM(ri.quantity * ri.price_at_visit) AS total
+           FROM public.reservations r JOIN public.reservation_items ri ON r.reservation_id = ri.reservation_id
+           GROUP BY wk ORDER BY wk
+- When returning a plot, output EXACTLY:
   PLOT_ID:<uuid>
 """
 
 
 class ManagerAnalyticsService:
-    """Service for manager analytics with independent SQL agent."""
+    """Service for manager analytics with independent SQL agent (LangGraph runtime)."""
 
     def __init__(self, model_name: str = "gpt-4o-mini"):
-        """Initialize the manager analytics service."""
         if not OPENAI_API_KEY:
             raise RuntimeError("OPENAI_API_KEY is required in .env")
 
         self.llm = ChatOpenAI(model=model_name, temperature=0)
-        
-        # Create plot cache for this instance
+
+        # Instance-specific plot cache
         self.plot_cache: Dict[str, bytes] = {}
-        
-        # Create plot tool with instance-specific cache
+
+        # Plot tool bound to this instance cache
         def plot_with_cache(data_sql: str, x: str, y_cols: List[str], title: Optional[str] = None) -> str:
             return plot_from_sql(data_sql, x, y_cols, title, self.plot_cache)
 
@@ -441,48 +420,25 @@ class ManagerAnalyticsService:
             name="plot_from_sql",
             description=(
                 "Run a read-only SELECT query, then plot y columns vs x. Returns PLOT_ID:<uuid>.\n"
-                "CRITICAL: For historical/time-series charts, the SQL MUST include:\n"
-                "1. A time dimension column (date, wk, month, etc.) in the SELECT\n"
-                "2. GROUP BY with that time column\n"
-                "3. ORDER BY that time column\n"
-                "4. Multiple rows (not just one aggregated total)\n"
-                "Example: SELECT date_trunc('week', date) AS wk, SUM(revenue) AS total FROM ... GROUP BY wk ORDER BY wk\n"
-                "Then use: x='wk', y_cols=['total']"
+                "For time-series, SQL must include time column + GROUP BY + ORDER BY."
             ),
             args_schema=PlotArgs,
         )
 
         self.tools = [SchemaTool, RunSQLTool, PlotTool]
 
-        # Build agent
-        prompt = ChatPromptTemplate.from_messages([
-            ("system", SYSTEM_PROMPT),
-            ("human", "{input}"),
-            MessagesPlaceholder("agent_scratchpad"),
-        ])
-
-        agent = create_tool_calling_agent(self.llm, self.tools, prompt)
-        self.agent_executor = AgentExecutor(
-            agent=agent,
+        # Create LangGraph ReAct agent (works with langchain 1.2.0)
+        self.agent = create_react_agent(
+            model=self.llm,
             tools=self.tools,
-            verbose=True,
-            max_iterations=8,
-            handle_parsing_errors=True,
+            prompt=SYSTEM_PROMPT,
         )
 
-    def query(self, prompt: str) -> Dict:
-        """
-        Process an analytics query and return response.
-
-        Args:
-            prompt: Natural language query
-
-        Returns:
-            Dictionary with text response and optional plot_url/plot_id
-        """
+    def query(self, prompt: str) -> Dict[str, Any]:
+        """Process an analytics query and return response."""
         try:
-            result = self.agent_executor.invoke({"input": prompt})
-            out = result["output"]
+            result = self.agent.invoke({"messages": [("user", prompt)]})
+            out = result["messages"][-1].content
 
             # Check for PLOT_ID
             m_id = re.search(r"PLOT_ID:\s*([0-9a-fA-F-]{36})", out, flags=re.I | re.S)
@@ -494,7 +450,7 @@ class ManagerAnalyticsService:
                     "plot_id": pid,
                 }
 
-            # Fallback: base64 (shouldn't happen with new tool)
+            # Fallback: base64 (shouldn't happen with tool)
             m_b64 = re.search(r"PLOT_BASE64_PNG:\s*([A-Za-z0-9+/=\r\n]+)", out, flags=re.S)
             if m_b64:
                 import base64
@@ -522,7 +478,7 @@ class ManagerAnalyticsService:
         """Get plot data by ID."""
         return self.plot_cache.get(plot_id)
 
-    def get_map_data(self) -> List[Dict]:
+    def get_map_data(self) -> List[Dict[str, Any]]:
         """Get store locations for map visualization."""
         try:
             sql = """
@@ -532,7 +488,7 @@ class ManagerAnalyticsService:
             ORDER BY store_id
             """
             df = _run_sql_readonly(_ensure_limit(sql, 10000))
-            out = []
+            out: List[Dict[str, Any]] = []
             for _, r in df.iterrows():
                 out.append({
                     "Store": r.get("store_name"),
@@ -545,4 +501,3 @@ class ManagerAnalyticsService:
             return out
         except Exception as e:
             raise Exception(f"Error loading map data: {e}")
-

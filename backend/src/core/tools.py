@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, validator
+from pydantic.v1 import BaseModel, Field, validator
 from langchain.tools import tool
 from src.core.calendar_client import get_calendar_service, create_event, update_event, cancel_event, generate_calendar_invitation_link
 from src.core.config import TZ

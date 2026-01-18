@@ -6,10 +6,19 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from src.core.config import SCOPES, TZ
 
-CREDENTIALS_FILE = "credentials.json"
-TOKEN_FILE = "token.json"
+# Obtener la ruta al directorio backend (3 niveles arriba desde src/core/calendar_client.py)
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+CREDENTIALS_FILE = os.path.join(BACKEND_DIR, "credentials.json")
+TOKEN_FILE = os.path.join(BACKEND_DIR, "token.json")
 
 def get_calendar_service():
+    # Verificar que credentials.json existe
+    if not os.path.exists(CREDENTIALS_FILE):
+        raise FileNotFoundError(
+            f"No se encontró el archivo credentials.json en la ruta esperada: {CREDENTIALS_FILE}\n"
+            f"Por favor, asegúrate de que el archivo credentials.json esté en el directorio backend/"
+        )
+    
     creds = None
     if os.path.exists(TOKEN_FILE):
         creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
