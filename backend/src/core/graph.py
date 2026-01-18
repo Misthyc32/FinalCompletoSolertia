@@ -2,8 +2,8 @@ from typing import TypedDict, List, Optional
 from langgraph.graph import StateGraph
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.documents import Document
-from langchain.prompts import ChatPromptTemplate
-from langchain.chat_models import init_chat_model
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_openai import ChatOpenAI
 from src.core.tools import CALENDAR_ID, reserva_restaurante_tool, update_reservation_tool, cancel_reservation_tool, get_last_event_id_tool  
 import datetime as dt
 import json
@@ -19,7 +19,7 @@ WEEKDAYS = {
     "jueves": TH, "viernes": FR, "sábado": SA, "sabado": SA, "domingo": SU
 }
 
-llm = init_chat_model("gpt-4o-mini", model_provider="openai")
+llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
 class GlobalState(TypedDict):
     customer_id: str
