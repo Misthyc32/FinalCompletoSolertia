@@ -32,6 +32,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: Run tests (if you have them)
+        run: |
+          pytest -q
+        continue-on-error: true
+
       - name: Docker build
         run: |
           docker build -t solertia-backend:ci -f Dockerfile .
